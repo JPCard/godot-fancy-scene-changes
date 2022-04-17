@@ -4,9 +4,9 @@ signal pre_transition
 
 const FadeScene = preload("res://addons/transitions/FadeScene.gd")
 
-var _tree:SceneTree
 var _root:Viewport
 var scene_container:Node setget _set_scene_container
+var _prev_scene:Node
 
 enum FadeType {
 	Instant, # immediately change
@@ -33,8 +33,7 @@ func _get_current_scene():
 	return null
 			
 func _ready():
-	_tree = get_tree()
-	_root = _tree.root
+	_root = get_tree().root
 	# Set the default container to be the root viewport.
 	# This maintains backwards compatability with previous versions.
 	scene_container = _root
@@ -49,6 +48,7 @@ func change_scene(new_scene, fade_type, fade_time_seconds:float = 1.0, shader_im
 		push_error("You need to specify a shader image for blending!")
 	
 	var data = _common_pre_fade(fade_type, fade_time_seconds, shader_image)
+	
 	_set_scene(new_scene)
 	emit_signal("pre_transition")
 	
@@ -82,14 +82,29 @@ func _common_pre_fade(fade_type, fade_time_seconds:float, shader_image:StreamTex
 	# game will look fine, though. To fix this, scale as needed.
 	# eg. if the game is 960x540 but test_width/test_height is 1600x900, the
 	# screenshot is 1600x900; so it looks zoomed in :facepalm:
-	var game_width:int = ProjectSettings.get_setting("display/window/size/width")
-	var game_height:int = ProjectSettings.get_setting("display/window/size/height")
+	var game_width:float = ProjectSettings.get("display/window/size/width")
+	var game_height:float = ProjectSettings.get("display/window/size/height")
 	var screenshot_width:float = screenshot.texture.get_width()
 	var screenshot_height:float = screenshot.texture.get_height()
 	
-	var sprite_scale = Vector2(game_width / screenshot_width, game_height / screenshot_height)
+	# correccion por cambio en aspect ratio
+	
+	var default_aspect_ratio: float = game_width / game_height
+	var new_aspect_ratio: float = screenshot_width / screenshot_height
+	var fixed_game_width: float
+	var fixed_game_height: float
+	
+	if(new_aspect_ratio > default_aspect_ratio): # it is wider
+		fixed_game_width = game_width * new_aspect_ratio / default_aspect_ratio
+		fixed_game_height = game_height
+	else: # it is higher
+		fixed_game_width = game_width
+		fixed_game_height = game_height * (screenshot_height/screenshot_width) / (game_height / game_width)
+	
+	
+	var sprite_scale = Vector2(fixed_game_width / screenshot_width, fixed_game_height / screenshot_height)
 	sprite.scale = sprite_scale
-	_root.add_child(fade_scene)
+	_root.call_deferred("add_child", fade_scene)
 	
 	# Remove visual abberations for other fades
 	if fade_type != FadeType.Blend:
@@ -133,16 +148,21 @@ func _common_post_fade(data:Array, new_scene) -> void:
 	if fade_scene in _root:
 		_root.remove_child(fade_scene)
 
-func _set_scene(new_scene):
+func _set_scene(new_scene:Node):
 	# Dispose old scene so we don't get any camera jitters or wierdness.
-	var previous_scene = _get_current_scene()
 	
-	scene_container.remove_child(previous_scene)
-	print("killed previous scene %s" % previous_scene)
-	previous_scene.queue_free()
+	var parent_node = get_tree().current_scene
 	
-	scene_container.add_child(new_scene)
-	_tree.current_scene = new_scene
+	if(_prev_scene != null):
+		print("killed previous scene %s" % _prev_scene)
+		_prev_scene.queue_free()
+	else:
+		print("there is no previous scene ")
+	
+	_prev_scene = new_scene
+	if(new_scene.get_parent() == parent_node):
+		return
+	parent_node.call_deferred("add_child", new_scene)
 
 # Necessary for those buttery-smooth jitter-free fades
 func _take_screenshot():
